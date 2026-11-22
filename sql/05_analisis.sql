@@ -1,161 +1,205 @@
 -- 05_analisis.sql
 -- Analisis del gasto en compras publicas (ChileCompra, ordenes enviadas en diciembre 2025)
 --
--- Definicion de "gasto": suma de monto_total_clp (en pesos chilenos, CON impuestos) de las
+-- Definicion de "gasto": suma de monto_total_clp (pesos chilenos, CON impuestos) de las
 -- ordenes enviadas en diciembre 2025, excluyendo las con cancelacion solicitada
--- (346 ordenes, 0,06% del monto). Cada orden se cuenta UNA sola vez.
+-- (346 ordenes, 0,06% del monto) y 3 ordenes con monto erroneo de origen (bloque 0).
+-- Cada orden se cuenta UNA sola vez.
 --
--- COMO EJECUTAR: en pgAdmin, selecciona con el mouse UNA consulta (desde su SELECT/WITH
--- hasta el punto y coma) y pulsa F5. Si ejecutas todo el archivo, solo veras el resultado
--- de la ultima consulta.
+-- COMO EJECUTAR: en pgAdmin, selecciona UNA consulta (desde su WITH hasta el punto y coma)
+-- y pulsa F5. Si ejecutas todo el archivo, solo veras el resultado de la ultima consulta.
 
 -- =====================================================================
--- 0) Vista base: ordenes validas para el analisis
+-- 0) Calidad de datos y vista base
+--    Se excluyen las ordenes con cancelacion solicitada y las ordenes cuyo monto
+--    es un error de origen, verificadas contra la ficha en mercadopublico.cl.
+--    Cada exclusion queda registrada con su motivo (no se borra ningun dato).
 -- =====================================================================
+DROP TABLE IF EXISTS compras.ordenes_excluidas CASCADE;
+
+CREATE TABLE compras.ordenes_excluidas(
+	codigo TEXT PRIMARY KEY REFERENCES compras.ordenes_compra (codigo),
+	motivo TEXT NOT NULL
+);
+
+INSERT INTO compras.ordenes_excluidas (codigo, motivo) VALUES
+('3833-1046-SE25', 'Moneda mal registrada: la ficha en Mercado Publico muestra TOTAL OC $5.242.181 (pesos), pero el dataset la trae como CLF y se convirtio a $208.200 millones.'),
+('2699-120-SE25', 'Monto mal digitado: la orden registra UF 4.267.520 (aprox. $169.500 millones), pero la especificacion del proveedor indica un total bruto de UF 9.622,52 (aprox. $381 millones).'),
+('766404-26-SE25', 'Moneda mal registrada: la ficha en Mercado Publico muestra TOTAL OC $56.492 (pesos) por la compra de 225 botellones de agua, pero el dataset la trae como CLF y se convirtio a $2.242 millones.');
+
 CREATE OR REPLACE VIEW compras.v_ordenes_validas AS
-SELECT *
-FROM compras.ordenes_compra
-WHERE estado IS DISTINCT FROM 'Cancelacion solicitada';
+SELECT
+	o.*
+FROM
+	compras.ordenes_compra o
+WHERE
+	o.estado IS DISTINCT FROM 'Cancelacion solicitada' AND
+	NOT EXISTS(
+		SELECT 1
+		FROM compras.ordenes_excluidas e
+		WHERE e.codigo = o.codigo
+	);
+
+
+-- =====================================================================
+-- 0b) Chequeo de calidad: moneda de la orden vs moneda de sus items
+--     Una orden en moneda extranjera cuyos items estan todos en CLP sugiere que la
+--     moneda del encabezado esta mal registrada (y el monto en pesos viene inflado).
+--     Las 2 ordenes de este tipo verificadas contra la ficha ya estan excluidas en el
+--     bloque 0. En diciembre 2025 las restantes son 5 ordenes que suman ~$1.180 millones
+--     (cerca de 0,08% del gasto): se mantienen en el analisis por su efecto marginal.
+--     Tecnicas: CTE, NOT EXISTS (anti-join)
+-- =====================================================================
+WITH ordenes_sospechosas AS(
+	SELECT
+		o.moneda,
+		o.monto_total,
+		o.monto_total_clp
+	FROM
+		compras.v_ordenes_validas o
+	WHERE
+		o.moneda <> 'CLP' AND
+		NOT EXISTS(
+			SELECT 1
+			FROM compras.items_oc i
+			WHERE i.codigo_oc = o.codigo AND i.moneda_item <> 'CLP'
+		)
+)
+SELECT
+	moneda,
+	COUNT(*) AS ordenes,
+	ROUND(SUM(monto_total_clp)/1e6) AS millones_clp_registrado,
+	ROUND(SUM(monto_total)/1e6,2) AS millones_si_fueran_pesos
+FROM
+	ordenes_sospechosas
+GROUP BY
+	moneda
+ORDER BY
+	SUM(monto_total_clp) DESC;
 
 
 -- =====================================================================
 -- 1) Que organismos concentran mas gasto?
---    Tecnicas: GROUP BY, window function SUM() OVER ()
+--    Tecnicas: CTE, GROUP BY, window function SUM() OVER()
 -- =====================================================================
-SELECT organismo,
-       COUNT(*)                                             AS ordenes,
-       ROUND(SUM(monto_total_clp) / 1e6)                    AS millones_clp,
-       ROUND(100.0 * SUM(monto_total_clp)
-             / SUM(SUM(monto_total_clp)) OVER (), 2)        AS pct_del_gasto_total
-FROM compras.v_ordenes_validas
-GROUP BY organismo
-ORDER BY SUM(monto_total_clp) DESC
+WITH gasto_organismo AS(
+	SELECT
+		organismo,
+		COUNT(*) AS ordenes,
+		SUM(monto_total_clp) AS monto_clp
+	FROM
+		compras.v_ordenes_validas
+	GROUP BY
+		organismo
+)
+SELECT
+	organismo,
+	ordenes,
+	ROUND(monto_clp/1e6) AS millones_clp,
+	ROUND(100*monto_clp/SUM(monto_clp) OVER(),2) AS pct_gasto_total
+FROM
+	gasto_organismo
+ORDER BY
+	monto_clp DESC
 LIMIT 10;
 
 
 -- =====================================================================
 -- 2) Quienes son los 10 mayores proveedores?
---    Tecnicas: JOIN, RANK()
+--    Tecnicas: CTEs encadenadas, JOIN, RANK()
 -- =====================================================================
-SELECT RANK() OVER (ORDER BY SUM(o.monto_total_clp) DESC) AS ranking,
-       p.nombre                                           AS proveedor,
-       COUNT(*)                                           AS ordenes,
-       ROUND(SUM(o.monto_total_clp) / 1e6)                AS millones_clp,
-       ROUND(100.0 * SUM(o.monto_total_clp)
-             / SUM(SUM(o.monto_total_clp)) OVER (), 2)    AS pct_del_gasto_total
-FROM compras.v_ordenes_validas o
-JOIN compras.proveedores p USING (codigo_proveedor)
-GROUP BY p.codigo_proveedor, p.nombre
-ORDER BY ranking
-LIMIT 10;
+WITH gasto_proveedor AS(
+	SELECT
+		p.codigo_proveedor,
+		p.nombre AS proveedor,
+		COUNT(*) AS ordenes,
+		SUM(o.monto_total_clp) AS monto_clp
+	FROM
+		compras.v_ordenes_validas o
+	JOIN
+		compras.proveedores p ON o.codigo_proveedor = p.codigo_proveedor
+	GROUP BY
+		p.codigo_proveedor,
+		p.nombre
+), ranking_proveedor AS(
+	SELECT
+		RANK() OVER(ORDER BY monto_clp DESC) AS ranking,
+		proveedor,
+		ordenes,
+		monto_clp,
+		ROUND(100*monto_clp/SUM(monto_clp) OVER(),2) AS pct_gasto_total
+	FROM
+		gasto_proveedor
+)
+SELECT
+	ranking,
+	proveedor,
+	ordenes,
+	ROUND(monto_clp/1e6) AS millones_clp,
+	pct_gasto_total
+FROM
+	ranking_proveedor
+WHERE
+	ranking <= 10
+ORDER BY
+	ranking;
 
 
 -- =====================================================================
 -- 3) Que tan concentrado esta el gasto? (curva de Pareto)
 --    Cuantos proveedores hacen falta para llegar al 50% y al 80% del gasto?
---    Tecnicas: CTE, suma acumulada con window function, FILTER
+--    Tecnicas: CTEs, suma acumulada con window function, FILTER
 -- =====================================================================
-WITH por_proveedor AS (
-    SELECT codigo_proveedor, SUM(monto_total_clp) AS monto
-    FROM compras.v_ordenes_validas
-    WHERE codigo_proveedor IS NOT NULL
-    GROUP BY codigo_proveedor
-),
-acumulado AS (
-    SELECT codigo_proveedor,
-           ROW_NUMBER() OVER (ORDER BY monto DESC, codigo_proveedor)      AS ranking,
-           SUM(monto) OVER (ORDER BY monto DESC, codigo_proveedor)
-             / SUM(monto) OVER ()                                         AS pct_acumulado
-    FROM por_proveedor
+WITH gasto_proveedor AS(
+	SELECT
+		codigo_proveedor,
+		SUM(monto_total_clp) AS monto_clp
+	FROM
+		compras.v_ordenes_validas
+	WHERE
+		codigo_proveedor IS NOT NULL
+	GROUP BY
+		codigo_proveedor
+), acumulado_proveedor AS(
+	SELECT
+		ROW_NUMBER() OVER(ORDER BY monto_clp DESC, codigo_proveedor) AS ranking,
+		SUM(monto_clp) OVER(ORDER BY monto_clp DESC, codigo_proveedor)/SUM(monto_clp) OVER() AS pct_acumulado
+	FROM
+		gasto_proveedor
 )
-SELECT COUNT(*)                                            AS total_proveedores,
-       MIN(ranking) FILTER (WHERE pct_acumulado >= 0.50)   AS proveedores_para_50pct,
-       MIN(ranking) FILTER (WHERE pct_acumulado >= 0.80)   AS proveedores_para_80pct
-FROM acumulado;
+SELECT
+	COUNT(*) AS total_proveedores,
+	MIN(ranking) FILTER(WHERE pct_acumulado >= 0.50) AS proveedores_para_50pct,
+	MIN(ranking) FILTER(WHERE pct_acumulado >= 0.80) AS proveedores_para_80pct
+FROM
+	acumulado_proveedor;
 
 
 -- =====================================================================
 -- 4) Cuanto se compra por trato directo, segun sector?
---    Tecnicas: agregacion condicional con FILTER
+--    Tecnicas: CTE con agregacion condicional (FILTER)
 -- =====================================================================
-SELECT sector,
-       COUNT(*)                                                       AS ordenes,
-       ROUND(SUM(monto_total_clp) / 1e6)                              AS millones_clp,
-       ROUND(100.0 * COUNT(*) FILTER (WHERE es_trato_directo)
-             / COUNT(*), 1)                                           AS pct_ordenes_trato_directo,
-       ROUND(100.0 * SUM(monto_total_clp) FILTER (WHERE es_trato_directo)
-             / SUM(monto_total_clp), 1)                               AS pct_monto_trato_directo
-FROM compras.v_ordenes_validas
-GROUP BY sector
-HAVING COUNT(*) >= 100
-ORDER BY SUM(monto_total_clp) DESC;
-
-
--- =====================================================================
--- 5) Como se distribuye el gasto por region del organismo comprador?
--- =====================================================================
-SELECT region_comprador,
-       COUNT(*)                                             AS ordenes,
-       ROUND(SUM(monto_total_clp) / 1e6)                    AS millones_clp,
-       ROUND(100.0 * SUM(monto_total_clp)
-             / SUM(SUM(monto_total_clp)) OVER (), 2)        AS pct_del_gasto_total
-FROM compras.v_ordenes_validas
-GROUP BY region_comprador
-ORDER BY SUM(monto_total_clp) DESC;
-
-
--- =====================================================================
--- 6) Como evoluciona el gasto dia a dia durante diciembre?
---    Tecnicas: window functions con marco (acumulado y media movil de 7 dias)
--- =====================================================================
-WITH diario AS (
-    SELECT fecha_envio,
-           COUNT(*)                          AS ordenes,
-           SUM(monto_total_clp) / 1e6        AS millones_clp
-    FROM compras.v_ordenes_validas
-    GROUP BY fecha_envio
+WITH gasto_sector AS(
+	SELECT
+		sector,
+		COUNT(*) AS ordenes,
+		COUNT(*) FILTER(WHERE es_trato_directo) AS ordenes_trato_directo,
+		SUM(monto_total_clp) AS monto_clp,
+		SUM(monto_total_clp) FILTER(WHERE es_trato_directo) AS monto_trato_directo
+	FROM
+		compras.v_ordenes_validas
+	GROUP BY
+		sector
+	HAVING
+		COUNT(*) >= 100
 )
-SELECT fecha_envio,
-       ordenes,
-       ROUND(millones_clp)                                                   AS millones_clp,
-       ROUND(SUM(millones_clp) OVER (ORDER BY fecha_envio))                  AS millones_acumulado,
-       ROUND(AVG(millones_clp) OVER (ORDER BY fecha_envio
-                                     ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)) AS media_movil_7d
-FROM diario
-ORDER BY fecha_envio;
-
-
--- =====================================================================
--- 7) Que rubros se compran mas?
---    Se usan los totales de linea NETOS (sin IVA) de items en CLP; los items en
---    otras monedas se excluyen porque no hay columna convertida a pesos.
---    Tecnicas: JOIN entre items y ordenes
--- =====================================================================
-SELECT i.rubro_n1                                           AS rubro,
-       COUNT(DISTINCT i.codigo_oc)                          AS ordenes,
-       ROUND(SUM(i.total_linea_neto) / 1e6)                 AS millones_clp_neto,
-       ROUND(100.0 * SUM(i.total_linea_neto)
-             / SUM(SUM(i.total_linea_neto)) OVER (), 2)     AS pct_del_total
-FROM compras.items_oc i
-JOIN compras.v_ordenes_validas o ON o.codigo = i.codigo_oc
-WHERE i.moneda_item = 'CLP'
-GROUP BY i.rubro_n1
-ORDER BY SUM(i.total_linea_neto) DESC
-LIMIT 10;
-
-
--- =====================================================================
--- 8) Cuantos dias tarda un proveedor en aceptar una orden, segun sector?
---    Tecnicas: percentile_cont (mediana), resta de fechas
--- =====================================================================
-SELECT sector,
-       COUNT(*)                                                                AS ordenes,
-       percentile_cont(0.5) WITHIN GROUP
-           (ORDER BY (fecha_aceptacion - fecha_envio)::float8)                 AS mediana_dias,
-       ROUND(AVG(fecha_aceptacion - fecha_envio), 1)                           AS promedio_dias
-FROM compras.v_ordenes_validas
-WHERE fecha_aceptacion IS NOT NULL
-  AND fecha_aceptacion >= fecha_envio
-GROUP BY sector
-HAVING COUNT(*) >= 100
-ORDER BY ordenes DESC;
+SELECT
+	sector,
+	ordenes,
+	ROUND(monto_clp/1e6) AS millones_clp,
+	ROUND(100.0*ordenes_trato_directo/ordenes,1) AS pct_ordenes_trato_directo,
+	ROUND(100*COALESCE(monto_trato_directo,0)/monto_clp,1) AS pct_monto_trato_directo
+FROM
+	gasto_sector
+ORDER BY
+	monto_clp DESC;
