@@ -1,20 +1,13 @@
--- 05_analisis.sql
--- Analisis del gasto en compras publicas (ChileCompra, ordenes enviadas en diciembre 2025)
---
--- Definicion de "gasto": suma de monto_total_clp (pesos chilenos, CON impuestos) de las
--- ordenes enviadas en diciembre 2025, excluyendo las con cancelacion solicitada
--- (346 ordenes, 0,06% del monto) y 3 ordenes con monto erroneo de origen (bloque 0).
--- Cada orden se cuenta UNA sola vez.
---
--- COMO EJECUTAR: en pgAdmin, selecciona UNA consulta (desde su WITH hasta el punto y coma)
--- y pulsa F5. Si ejecutas todo el archivo, solo veras el resultado de la ultima consulta.
+-- Analisis del gasto en compras publicas (ordenes enviadas en diciembre 2025)
 
--- =====================================================================
+-- Definicion de "gasto": suma de monto_total_clp de las
+-- ordenes enviadas en diciembre 2025, excluyendo las con cancelacion solicitada
+-- (346 ordenes, 0,06% del monto) y 3 ordenes con monto erroneo de origen.
+
 -- 0) Calidad de datos y vista base
 --    Se excluyen las ordenes con cancelacion solicitada y las ordenes cuyo monto
 --    es un error de origen, verificadas contra la ficha en mercadopublico.cl.
---    Cada exclusion queda registrada con su motivo (no se borra ningun dato).
--- =====================================================================
+
 DROP TABLE IF EXISTS compras.ordenes_excluidas CASCADE;
 
 CREATE TABLE compras.ordenes_excluidas(
@@ -23,9 +16,9 @@ CREATE TABLE compras.ordenes_excluidas(
 );
 
 INSERT INTO compras.ordenes_excluidas (codigo, motivo) VALUES
-('3833-1046-SE25', 'Moneda mal registrada: la ficha en Mercado Publico muestra TOTAL OC $5.242.181 (pesos), pero el dataset la trae como CLF y se convirtio a $208.200 millones.'),
-('2699-120-SE25', 'Monto mal digitado: la orden registra UF 4.267.520 (aprox. $169.500 millones), pero la especificacion del proveedor indica un total bruto de UF 9.622,52 (aprox. $381 millones).'),
-('766404-26-SE25', 'Moneda mal registrada: la ficha en Mercado Publico muestra TOTAL OC $56.492 (pesos) por la compra de 225 botellones de agua, pero el dataset la trae como CLF y se convirtio a $2.242 millones.');
+('3833-1046-SE25', 'Moneda mal registrada: la ficha en Mercado Publico muestra TOTAL OC $5.242.181 pesos, pero el dataset la trae como CLF y se convirtio a $208.200 millones.'),
+('2699-120-SE25', 'Monto mal digitado: la orden registra UF 4.267.520, pero la especificacion del proveedor indica un total bruto de UF 9.622,52.'),
+('766404-26-SE25', 'Moneda mal registrada: la ficha en Mercado Publico muestra TOTAL OC $56.492 pesos por la compra de 225 botellones de agua, pero el dataset la trae como CLF y se convirtio a $2.242 millones.');
 
 CREATE OR REPLACE VIEW compras.v_ordenes_validas AS
 SELECT
@@ -41,15 +34,14 @@ WHERE
 	);
 
 
--- =====================================================================
 -- 0b) Chequeo de calidad: moneda de la orden vs moneda de sus items
 --     Una orden en moneda extranjera cuyos items estan todos en CLP sugiere que la
---     moneda del encabezado esta mal registrada (y el monto en pesos viene inflado).
---     Las 2 ordenes de este tipo verificadas contra la ficha ya estan excluidas en el
---     bloque 0. En diciembre 2025 las restantes son 5 ordenes que suman ~$1.180 millones
+--     moneda del encabezado esta mal registrada.
+--     Las 2 ordenes verificadas contra la ficha ya estan excluidas en el
+--     bloque 0. En diciembre 2025 las restantes son 5 ordenes que suman $1.180 millones
 --     (cerca de 0,08% del gasto): se mantienen en el analisis por su efecto marginal.
 --     Tecnicas: CTE, NOT EXISTS (anti-join)
--- =====================================================================
+
 WITH ordenes_sospechosas AS(
 	SELECT
 		o.moneda,
@@ -78,10 +70,10 @@ ORDER BY
 	SUM(monto_total_clp) DESC;
 
 
--- =====================================================================
+
 -- 1) Que organismos concentran mas gasto?
 --    Tecnicas: CTE, GROUP BY, window function SUM() OVER()
--- =====================================================================
+
 WITH gasto_organismo AS(
 	SELECT
 		organismo,
@@ -104,10 +96,9 @@ ORDER BY
 LIMIT 10;
 
 
--- =====================================================================
 -- 2) Quienes son los 10 mayores proveedores?
 --    Tecnicas: CTEs encadenadas, JOIN, RANK()
--- =====================================================================
+
 WITH gasto_proveedor AS(
 	SELECT
 		p.codigo_proveedor,
@@ -145,11 +136,10 @@ ORDER BY
 	ranking;
 
 
--- =====================================================================
--- 3) Que tan concentrado esta el gasto? (curva de Pareto)
+-- 3) Que tan concentrado esta el gasto?
 --    Cuantos proveedores hacen falta para llegar al 50% y al 80% del gasto?
 --    Tecnicas: CTEs, suma acumulada con window function, FILTER
--- =====================================================================
+
 WITH gasto_proveedor AS(
 	SELECT
 		codigo_proveedor,
@@ -175,10 +165,9 @@ FROM
 	acumulado_proveedor;
 
 
--- =====================================================================
+
 -- 4) Cuanto se compra por trato directo, segun sector?
---    Tecnicas: CTE con agregacion condicional (FILTER)
--- =====================================================================
+--    Tecnicas: CTE con agregacion condicional 
 WITH gasto_sector AS(
 	SELECT
 		sector,

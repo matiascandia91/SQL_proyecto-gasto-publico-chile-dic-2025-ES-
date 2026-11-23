@@ -1,13 +1,13 @@
 # Gasto público en compras del Estado de Chile (diciembre 2025)
 
-Proyecto de análisis en **SQL (PostgreSQL)** sobre los datos abiertos de ChileCompra / Mercado Público: **155.260 órdenes de compra** y **428.043 líneas de productos** enviadas durante diciembre de 2025.
+Proyecto de análisis en **SQL (PostgreSQL)** sobre los datos abiertos de ChileCompra: **155.260 órdenes de compra** y **428.043 líneas de productos** enviadas durante diciembre de 2025.
 
 El foco no es solo consultar, sino **llevar datos reales y sucios hasta un modelo confiable**: carga, limpieza, modelado relacional, verificación contra la fuente y análisis con CTEs y window functions.
 
 ## Hallazgos
 
 ### 1. Sumar directamente la tabla original más que duplica el gasto
-En los datos originales cada fila es una **línea de producto**, y el monto total de la orden se repite en todas sus líneas. Sobre los datos sin depurar:
+En los datos originales cada fila es una línea de producto, y el monto total de la orden se repite en todas sus líneas. Sobre los datos sin depurar:
 
 | Cálculo | Monto (CLP) |
 |---|---|
@@ -26,12 +26,12 @@ Al revisar las órdenes de mayor monto contra su ficha en mercadopublico.cl, tre
 | `766404-26-SE25` (compra de 225 botellones de agua) | La ficha muestra **$56.492** en pesos, pero el dataset la trae como UF y se convirtió a $2.242 millones |
 | `2699-120-SE25` (seguros de bienes municipales) | Monto mal digitado: la orden registra UF 4,27 millones (≈ $169.500 millones), pero el total bruto indicado por el proveedor es UF 9.622,52 (≈ $381 millones) |
 
-Las tres se **excluyen del análisis** y quedan registradas con su motivo en la tabla `compras.ordenes_excluidas` (no se borra ningún dato). Un chequeo sistemático (moneda de la orden contra moneda de sus líneas) detectó 5 órdenes más con el mismo patrón, por unos $1.180 millones (≈ 0,08% del gasto): se mantienen por su efecto marginal. El chequeo está documentado en `sql/05_analisis.sql`.
+Las tres se **excluyen del análisis** y quedan registradas con su motivo en la tabla `compras.ordenes_excluidas`. Un chequeo sistemático detectó 5 órdenes más con el mismo patrón, por unos $1.180 millones: se mantienen por su efecto marginal. El chequeo está documentado en `sql/05_analisis.sql`.
 
 Tras la depuración, el gasto analizado es de **≈ $1,40 billones** en **154.911 órdenes**.
 
-### 3. El gasto está concentrado en pocos organismos y, sobre todo, en pocos proveedores
-- **Organismos:** Cenabast concentra el **9,3%** del gasto y el Ministerio de Obras Públicas (Dirección General) el 4,9%. Los 10 mayores organismos suman el **27,1%**.
+### 3. El gasto está concentrado en pocos organismos y en pocos proveedores
+- **Organismos:** Cenabast concentra el **9,3%** del gasto y el Ministerio de Obras Públicas el 4,9%. Los 10 mayores organismos suman el **27,1%**.
 - **Proveedores:** de 26.513 proveedores con órdenes, **201 (0,8%) concentran el 50% del gasto** y **1.496 (5,6%) el 80%**.
 - Los tres mayores proveedores son constructoras con entre 1 y 4 órdenes cada una (entre $25.900 y $30.000 millones): el ranking refleja contratos de obras puntuales más que compras recurrentes. Más abajo aparecen proveedores de medicamentos (Roche, MSD, Johnson & Johnson), combustible (Copec) y beneficios (Edenred).
 
@@ -67,7 +67,7 @@ proveedores (1) ──── (N) ordenes_compra (1) ──── (N) items_oc
 
 - Archivo en **Latin-1**, separado por `;`, con textos multilínea y bytes sin definir.
 - Valores `NA` convertidos a nulos; textos con caracteres de control y comillas curvas normalizados.
-- Fechas en formato `aaaa-mm-dd` y montos en **notación científica** (por ejemplo `3e+06`) convertidos a tipos nativos.
+- Fechas en formato `aaaa-mm-dd` y montos en **notación científica** (por ejemplo `3e+06`) convertidos a nativos.
 - Montos en cinco monedas (CLP, UF, UTM, USD, EUR): se usa la columna ya convertida a pesos que entrega la fuente.
 - Verificación automatizada (`04_verificacion.sql`): conteos, consistencia de cabeceras entre líneas de una misma orden, conversiones fallidas y caracteres mal codificados.
 
@@ -80,7 +80,7 @@ CTEs encadenadas, window functions (`SUM() OVER`, `RANK`, `ROW_NUMBER`, sumas ac
 ```
 ├── README.md
 ├── data/
-│   └── README.md          # instrucciones de descarga (el CSV no se incluye)
+│   └── README.md          # instrucciones de descarga (el CSV no se incluye debido a su peso)
 └── sql/
     ├── 01_staging.sql         # esquema de carga (todo texto)
     ├── 02_carga.sql           # comando de carga y formato real del archivo
@@ -91,23 +91,22 @@ CTEs encadenadas, window functions (`SUM() OVER`, `RANK`, `ROW_NUMBER`, sumas ac
 
 ## Cómo reproducirlo
 
-1. Descarga el CSV de órdenes de compra de diciembre 2025 (ver `data/README.md`).
-2. Crea la base: `CREATE DATABASE chilecompra;`
-3. Ejecuta `sql/01_staging.sql`.
-4. Carga el archivo con `\copy` desde `psql`, usando el comando de `sql/02_carga.sql` (con tu ruta).
+1. Descargar el CSV de órdenes de compra de diciembre 2025 (ver `data/README.md`).
+2. Crear la base: `CREATE DATABASE chilecompra;`
+3. Ejecutar `sql/01_staging.sql`.
+4. Carga el archivo con `\copy` desde `psql`, usando el comando de `sql/02_carga.sql` utilizando la ruta del archivo.
 5. Ejecuta `sql/03_modelo.sql` y luego `sql/04_verificacion.sql`.
-6. Ejecuta `sql/05_analisis.sql`, una consulta a la vez.
+6. Ejecuta `sql/05_analisis.sql`.
 
 Probado con PostgreSQL 18.
 
 ## Limitaciones
 
-- Cubre **un solo mes** (diciembre 2025). El mismo modelo se puede extender a los 12 meses de 2025.
-- Los montos incluyen impuestos y corresponden a órdenes enviadas en el mes, en cualquier estado salvo cancelación solicitada.
-- El archivo no trae el tamaño de empresa del proveedor, por lo que no se analiza la participación de pymes.
+- Cubre **un solo mes** (diciembre 2025). 
+- Los montos incluyen impuestos y corresponden a órdenes enviadas en el mes, en cualquier estado excepto cancelación solicitada.
 - 5.766 órdenes (3,7%) no informan sector.
-- La región viene escrita con formatos mixtos en la fuente (por ejemplo, "Región de Valparaíso" y "Valparaíso"); no se utiliza en este análisis.
-- La revisión de montos anómalos se concentró en las órdenes de mayor valor: es posible que existan errores menores no detectados.
+- La región viene escrita con formatos mixtos en la fuente (por ejemplo, "Región de Valparaíso" y "Valparaíso").
+
 
 ## Fuente de datos
 

@@ -1,16 +1,11 @@
--- 03_modelo.sql
 -- Transforma staging.oc_raw (todo texto, una fila por ITEM) en tablas tipadas y
 -- normalizadas en el esquema "compras":
 --     proveedores  1 ---- N  ordenes_compra  1 ---- N  items_oc
---
--- Se puede ejecutar varias veces: borra y recrea el esquema "compras".
--- Ejecutar completo (en pgAdmin: abrir el archivo en el Query Tool y pulsar F5).
 
--- =====================================================================
--- 1) FUNCIONES DE LIMPIEZA (viven en staging)
--- =====================================================================
 
--- Texto limpio: corrige caracteres propios de Windows-1252 leidos como Latin-1,
+-- 1) FUNCIONES DE LIMPIEZA 
+
+-- Texto limpio: corrige caracteres Windows-1252 leidos como Latin-1,
 -- elimina caracteres de control, recorta espacios y convierte '' y 'NA' en NULL.
 --   chr(145)/chr(146) -> comilla simple    chr(147)/chr(148) -> comilla doble
 --   chr(150)/chr(151) -> guion
@@ -25,16 +20,16 @@ LANGUAGE sql IMMUTABLE AS $$
     ), ''), 'NA')
 $$;
 
--- Numero -> NUMERIC. Acepta enteros, decimales con punto o con coma ('59790211,25')
+-- Numero -> NUMERIC. Acepta enteros, decimales con punto o con coma 
 -- y notacion cientifica ('3e+06', que el archivo usa para algunos montos redondos).
--- Si no calza, devuelve NULL.
+-- Si no, devuelve NULL.
 CREATE OR REPLACE FUNCTION staging.a_numero(t TEXT) RETURNS NUMERIC
 LANGUAGE sql IMMUTABLE AS $$
     SELECT CASE WHEN btrim(t) ~ '^-?[0-9]+([.,][0-9]+)?([eE][+-]?[0-9]+)?$'
                 THEN replace(btrim(t), ',', '.')::numeric END
 $$;
 
--- Entero (codigos). Si no calza, devuelve NULL.
+-- Entero. Si no, devuelve NULL.
 CREATE OR REPLACE FUNCTION staging.a_entero(t TEXT) RETURNS BIGINT
 LANGUAGE sql IMMUTABLE AS $$
     SELECT CASE WHEN btrim(t) ~ '^[0-9]{1,18}$' THEN btrim(t)::bigint END
@@ -52,16 +47,13 @@ LANGUAGE sql AS $$
     END
 $$;
 
--- =====================================================================
 -- 2) ESQUEMA LIMPIO
--- =====================================================================
+
 DROP SCHEMA IF EXISTS compras CASCADE;
 CREATE SCHEMA compras;
 
--- ---------------------------------------------------------------------
 -- proveedores: una fila por codigo de proveedor
--- (el RUT esta a nivel de sucursal y a veces viene como NA, por eso no se usa como clave)
--- ---------------------------------------------------------------------
+
 CREATE TABLE compras.proveedores (
     codigo_proveedor BIGINT PRIMARY KEY,
     nombre           TEXT,
@@ -86,9 +78,9 @@ FROM (
 WHERE codigo_proveedor IS NOT NULL
 ORDER BY codigo_proveedor, nombre;
 
--- ---------------------------------------------------------------------
--- ordenes_compra: UNA fila por orden (en staging se repite en cada item)
--- ---------------------------------------------------------------------
+
+-- ordenes_compra: una fila por orden 
+
 CREATE TABLE compras.ordenes_compra (
     codigo                    TEXT PRIMARY KEY,
     nombre                    TEXT,
@@ -104,7 +96,7 @@ CREATE TABLE compras.ordenes_compra (
     fecha_ultima_modificacion DATE,
     moneda                    TEXT,
     monto_total               NUMERIC,   -- en la moneda original de la orden
-    monto_total_clp           NUMERIC,   -- convertido a pesos chilenos (usar este para sumar)
+    monto_total_clp           NUMERIC,   -- convertido a pesos chilenos 
     impuestos                 NUMERIC,
     descuentos                NUMERIC,
     cargos                    NUMERIC,
@@ -161,10 +153,9 @@ FROM staging.oc_raw
 WHERE codigo IS NOT NULL AND btrim(codigo) <> ''
 ORDER BY codigo, iditem;
 
--- ---------------------------------------------------------------------
+
 -- items_oc: una fila por linea de cada orden
--- (no se copian las especificaciones largas de comprador/proveedor)
--- ---------------------------------------------------------------------
+
 CREATE TABLE compras.items_oc (
     codigo_oc           TEXT   NOT NULL REFERENCES compras.ordenes_compra (codigo),
     id_item             BIGINT NOT NULL,

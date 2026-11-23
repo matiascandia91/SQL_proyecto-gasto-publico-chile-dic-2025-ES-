@@ -1,4 +1,3 @@
--- 02_carga.sql
 -- Carga del CSV de ordenes de compra (ChileCompra, diciembre 2025) a staging.oc_raw
 --
 -- Formato real del archivo:
@@ -9,8 +8,6 @@
 -- Se usa LATIN1 y no WIN1252 porque el archivo trae bytes sin definir (0x81)
 -- que WIN1252 rechaza (fallaba en la linea 345790).
 --
--- Ejecutar desde psql (SQL Shell), en UNA sola linea y ajustando la ruta.
--- \copy no funciona en pgAdmin ni en SQLTools, solo en psql.
 --
 -- \copy staging.oc_raw FROM 'RUTA/AL/2025-12.csv' WITH (FORMAT csv, HEADER true, DELIMITER ';', QUOTE '"', ESCAPE '"', ENCODING 'LATIN1')
 --

@@ -1,6 +1,4 @@
--- 04_verificacion.sql
--- Una sola consulta que devuelve una tabla de chequeos (en pgAdmin solo se muestra
--- el resultado de la ULTIMA consulta, por eso va todo junto).
+-- Una sola consulta que devuelve una tabla de chequeos 
 
 SELECT 'ordenes_compra (esperado 155260)' AS chequeo,
        COUNT(*)::text AS resultado

@@ -83,5 +83,3 @@ CREATE TABLE staging.oc_raw (
     forma_de_pago TEXT
 );
 
--- Carga (ejecutar dentro de psql, ajustando la ruta al nombre real de tu CSV):
--- \copy staging.oc_raw FROM 'data/2025-12.csv' WITH (FORMAT csv, HEADER true, DELIMITER E'\t', ENCODING 'UTF8', QUOTE '"')
